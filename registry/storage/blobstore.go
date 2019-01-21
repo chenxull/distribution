@@ -23,11 +23,12 @@ var _ distribution.BlobProvider = &blobStore{}
 
 // Get implements the BlobReadService.Get call.
 func (bs *blobStore) Get(ctx context.Context, dgst digest.Digest) ([]byte, error) {
+	/* path使用digest定位到blob的规范地址，并且返回 */
 	bp, err := bs.path(dgst)
 	if err != nil {
 		return nil, err
 	}
-
+	/* 获取存储在这个地址中的内容，返回的[]byte类型 */
 	p, err := getContent(ctx, bs.driver, bp)
 	if err != nil {
 		switch err.(type) {
@@ -172,6 +173,7 @@ var _ distribution.BlobDescriptorService = &blobStatter{}
 // in the main blob store. If this method returns successfully, there is
 // strong guarantee that the blob exists and is available.
 func (bs *blobStatter) Stat(ctx context.Context, dgst digest.Digest) (distribution.Descriptor, error) {
+	/* path就是目标blob的digest */
 	path, err := pathFor(blobDataPathSpec{
 		digest: dgst,
 	})
@@ -179,7 +181,7 @@ func (bs *blobStatter) Stat(ctx context.Context, dgst digest.Digest) (distributi
 	if err != nil {
 		return distribution.Descriptor{}, err
 	}
-
+	/* 返回指定路径文件的信息，包括文件大小和创建时间 */
 	fi, err := bs.driver.Stat(ctx, path)
 	if err != nil {
 		switch err := err.(type) {
@@ -201,7 +203,12 @@ func (bs *blobStatter) Stat(ctx context.Context, dgst digest.Digest) (distributi
 	// TODO(stevvooe): Add method to resolve the mediatype. We can store and
 	// cache a "global" media type for the blob, even if a specific repo has a
 	// mediatype that overrides the main one.
+	/*
 
+	   描述符描述了目标内容。与blob存储结合使用时，描述符可用于获取，
+	   存储和定位任何类型的blob。
+	   该结构还描述了有线协议格式。字段只应添加但不会更改。
+	*/
 	return distribution.Descriptor{
 		Size: fi.Size(),
 

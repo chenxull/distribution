@@ -35,6 +35,7 @@ func testServer(rrm testutil.RequestResponseMap) (string, func()) {
 	return s.URL, s.Close
 }
 
+// 生成blob的digest
 func newRandomBlob(size int) (digest.Digest, []byte) {
 	b := make([]byte, size)
 	if n, err := rand.Read(b); err != nil {
@@ -46,11 +47,14 @@ func newRandomBlob(size int) (digest.Digest, []byte) {
 	return digest.FromBytes(b), b
 }
 
+/* 测试pull layer */
 func addTestFetch(repo string, dgst digest.Digest, content []byte, m *testutil.RequestResponseMap) {
 	*m = append(*m, testutil.RequestResponseMapping{
+		/* 生成请求的报头 */
 		Request: testutil.Request{
 			Method: "GET",
-			Route:  "/v2/" + repo + "/blobs/" + dgst.String(),
+			/* digest用于定位具体的layer */
+			Route: "/v2/" + repo + "/blobs/" + dgst.String(),
 		},
 		Response: testutil.Response{
 			StatusCode: http.StatusOK,
@@ -62,6 +66,7 @@ func addTestFetch(repo string, dgst digest.Digest, content []byte, m *testutil.R
 		},
 	})
 
+	/* HEAD请求用于检测目标registry中是否有对应的layer */
 	*m = append(*m, testutil.RequestResponseMapping{
 		Request: testutil.Request{
 			Method: "HEAD",
@@ -77,6 +82,7 @@ func addTestFetch(repo string, dgst digest.Digest, content []byte, m *testutil.R
 	})
 }
 
+/* 列出本地registry集群中一组可用的存储库 */
 func addTestCatalog(route string, content []byte, link string, m *testutil.RequestResponseMap) {
 	headers := map[string][]string{
 		"Content-Length": {strconv.Itoa(len(content))},
@@ -85,7 +91,7 @@ func addTestCatalog(route string, content []byte, link string, m *testutil.Reque
 	if link != "" {
 		headers["Link"] = append(headers["Link"], link)
 	}
-
+	/* 请求报头 GET /V2/_catalog */
 	*m = append(*m, testutil.RequestResponseMapping{
 		Request: testutil.Request{
 			Method: "GET",
@@ -99,7 +105,9 @@ func addTestCatalog(route string, content []byte, link string, m *testutil.Reque
 	})
 }
 
+/* 删除指定存储库中的blob，使用digest来定位具体的blob */
 func TestBlobDelete(t *testing.T) {
+	/* 生成大小为1024blob的digest */
 	dgst, _ := newRandomBlob(1024)
 	var m testutil.RequestResponseMap
 	repo, _ := reference.WithName("test.example.com/repo1")
@@ -118,13 +126,25 @@ func TestBlobDelete(t *testing.T) {
 
 	e, c := testServer(m)
 	defer c()
-
+	/*  context用于追踪gorountine的上下文，
+	Background是这个树结构最顶层的节点
+	*/
 	ctx := context.Background()
+	/* 使用testServer生成的url创建一个新的存储库，用于测试 */
 	r, err := NewRepository(repo, e, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	/* 生成blobs结构，返回的数据结构l如下：
+	blobs{
+		name:    r.name,
+		ub:      r.ub,
+		client:  r.client,
+		statter: cache.NewCachedBlobStatter(memory.NewInMemoryBlobDescriptorCacheProvider(), statter),
+	}
+	*/
 	l := r.Blobs(ctx)
+	/* 根据digest删除数据 */
 	err = l.Delete(ctx, dgst)
 	if err != nil {
 		t.Errorf("Error deleting blob: %s", err.Error())
@@ -132,9 +152,11 @@ func TestBlobDelete(t *testing.T) {
 
 }
 
+/* 测试 pull blob*/
 func TestBlobFetch(t *testing.T) {
 	d1, b1 := newRandomBlob(1024)
 	var m testutil.RequestResponseMap
+	/* 调用#51的函数 */
 	addTestFetch("test.example.com/repo1", d1, b1, &m)
 
 	e, c := testServer(m)
@@ -142,16 +164,21 @@ func TestBlobFetch(t *testing.T) {
 
 	ctx := context.Background()
 	repo, _ := reference.WithName("test.example.com/repo1")
+	//创建目的registry的存储库
 	r, err := NewRepository(repo, e, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	/* 在目的存储库中创建blobstore */
 	l := r.Blobs(ctx)
-
+	/* Get方法的地址/Users/chenxu/Desktop/mygo/src/github.com/docker/distribution/registry/storage/blobstore.go
+	Get方法获取存储在registry存储库中的数据，返回类型为[]byte
+	*/
 	b, err := l.Get(ctx, d1)
 	if err != nil {
 		t.Fatal(err)
 	}
+	/* 比较原数据大小和pull下来的数据大小是否一致 */
 	if bytes.Compare(b, b1) != 0 {
 		t.Fatalf("Wrong bytes values fetched: [%d]byte != [%d]byte", len(b), len(b1))
 	}
@@ -159,6 +186,7 @@ func TestBlobFetch(t *testing.T) {
 	// TODO(dmcgowan): Test for unknown blob case
 }
 
+/* 测试blob在目标registry中是否存在,NoContentLength？ */
 func TestBlobExistsNoContentLength(t *testing.T) {
 	var m testutil.RequestResponseMap
 
@@ -202,6 +230,9 @@ func TestBlobExistsNoContentLength(t *testing.T) {
 	}
 	l := r.Blobs(ctx)
 
+	/* /Users/chenxu/Desktop/mygo/src/github.com/docker/distribution/registry/storage/blobstore.go
+	stat继承了BlobStatter.Stat，返回blob的描述符，如果成功返回，则确保此blob存在并且可用
+	*/
 	_, err = l.Stat(ctx, dgst)
 	if err == nil {
 		t.Fatal(err)
@@ -212,6 +243,7 @@ func TestBlobExistsNoContentLength(t *testing.T) {
 
 }
 
+/* 测试blob是否存在 */
 func TestBlobExists(t *testing.T) {
 	d1, b1 := newRandomBlob(1024)
 	var m testutil.RequestResponseMap
@@ -228,15 +260,22 @@ func TestBlobExists(t *testing.T) {
 	}
 	l := r.Blobs(ctx)
 
+	/*  stat返回的格式如下：distribution.Descriptor{
+		Size: fi.Size(),
+		MediaType: "application/octet-stream",
+		Digest:    dgst,
+	}, nil
+	*/
 	stat, err := l.Stat(ctx, d1)
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	/* 如果返回的digest和原来的不相同，报错 */
 	if stat.Digest != d1 {
 		t.Fatalf("Unexpected digest: %s, expected %s", stat.Digest, d1)
 	}
-
+	/* 大小不相同也报错 */
 	if stat.Size != int64(len(b1)) {
 		t.Fatalf("Unexpected length: %d, expected %d", stat.Size, len(b1))
 	}
@@ -244,19 +283,25 @@ func TestBlobExists(t *testing.T) {
 	// TODO(dmcgowan): Test error cases and ErrBlobUnknown case
 }
 
+/* 测试push 镜像 */
 func TestBlobUploadChunked(t *testing.T) {
 	dgst, b1 := newRandomBlob(1024)
 	var m testutil.RequestResponseMap
+	/* chunks将整个blob分成多个小块，用于上传 */
 	chunks := [][]byte{
 		b1[0:256],
 		b1[256:512],
 		b1[512:513],
 		b1[513:1024],
 	}
+	//TODO:有待了解reference字段
 	repo, _ := reference.WithName("test.example.com/uploadrepo")
+	/* 生成唯一标志符 */
 	uuids := []string{uuid.Generate().String()}
 	m = append(m, testutil.RequestResponseMapping{
 		Request: testutil.Request{
+			/* 第一步：POST请求用来获取一个url，这个url从Response中的，Location获取
+			来执行第二步的实际上传操作 */
 			Method: "POST",
 			Route:  "/v2/" + repo.Name() + "/blobs/uploads/",
 		},
@@ -271,11 +316,13 @@ func TestBlobUploadChunked(t *testing.T) {
 		},
 	})
 	offset := 0
+	/* 为blob中的每一个chunk生成一个uuid，并且计算出位移量offset */
 	for i, chunk := range chunks {
 		uuids = append(uuids, uuid.Generate().String())
 		newOffset := offset + len(chunk)
 		m = append(m, testutil.RequestResponseMapping{
 			Request: testutil.Request{
+				/* 第二步（重复）：PATCH 执行chunk的上传操作 */
 				Method: "PATCH",
 				Route:  "/v2/" + repo.Name() + "/blobs/uploads/" + uuids[i],
 				Body:   chunk,
@@ -286,7 +333,8 @@ func TestBlobUploadChunked(t *testing.T) {
 					"Content-Length":     {"0"},
 					"Location":           {"/v2/" + repo.Name() + "/blobs/uploads/" + uuids[i+1]},
 					"Docker-Upload-UUID": {uuids[i+1]},
-					"Range":              {fmt.Sprintf("%d-%d", offset, newOffset-1)},
+					/* 表示下一个块的范围必须紧接在前一个响应的”最后有效范围“之后开始 */
+					"Range": {fmt.Sprintf("%d-%d", offset, newOffset-1)},
 				}),
 			},
 		})
@@ -294,6 +342,7 @@ func TestBlobUploadChunked(t *testing.T) {
 	}
 	m = append(m, testutil.RequestResponseMapping{
 		Request: testutil.Request{
+			/* 上传倒数第二步：要想上传过程被视为完成，上传最后一个chunk的同时必须要上传 digest */
 			Method: "PUT",
 			Route:  "/v2/" + repo.Name() + "/blobs/uploads/" + uuids[len(uuids)-1],
 			QueryParams: map[string][]string{
@@ -303,6 +352,9 @@ func TestBlobUploadChunked(t *testing.T) {
 		Response: testutil.Response{
 			StatusCode: http.StatusCreated,
 			Headers: http.Header(map[string][]string{
+				/* registry接受到最后一个chunk并且layer被成功验证，
+				client将会受到 201 Created 回复
+				*/
 				"Content-Length":        {"0"},
 				"Docker-Content-Digest": {dgst.String()},
 				"Content-Range":         {fmt.Sprintf("0-%d", offset-1)},
@@ -311,6 +363,7 @@ func TestBlobUploadChunked(t *testing.T) {
 	})
 	m = append(m, testutil.RequestResponseMapping{
 		Request: testutil.Request{
+			/* 最后一步：使用HEAD检验目标rregistry中是否存在此blob。 */
 			Method: "HEAD",
 			Route:  "/v2/" + repo.Name() + "/blobs/" + dgst.String(),
 		},
@@ -333,6 +386,31 @@ func TestBlobUploadChunked(t *testing.T) {
 	}
 	l := r.Blobs(ctx)
 
+	/*  Create 指定一个新的blob writer去添加blob到l中，
+	可以写入返回的句柄，然后使用opaque恢复
+	标识符。使用这种方法，可以关闭并恢复BlobWriter
+	多次，直到BlobWriter被提交或取消。
+	*/
+	/*  TODO:找到l.create的具体实现。upload是一个blobwrite类型
+		type BlobWriter interface {
+		io.WriteCloser
+		io.ReaderFrom
+
+		// Size returns the number of bytes written to this blob.
+		Size() int64
+
+		// ID returns the identifier for this writer. The ID can be used with the
+		// Blob service to later resume the write.
+		ID() string
+
+		// StartedAt returns the time this blob write was started.
+		StartedAt() time.Time
+
+
+		Commit(ctx context.Context, provisional Descriptor) (canonical Descriptor, err error)
+		Cancel(ctx context.Context) error
+	}
+	*/
 	upload, err := l.Create(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -343,6 +421,8 @@ func TestBlobUploadChunked(t *testing.T) {
 	}
 
 	for _, chunk := range chunks {
+		/* 开始上传数据，write的实现继承了标准的写接口，
+		将数据写入到pipe中，阻塞直到这些数据被消费并且read端关闭。 */
 		n, err := upload.Write(chunk)
 		if err != nil {
 			t.Fatal(err)
@@ -351,7 +431,7 @@ func TestBlobUploadChunked(t *testing.T) {
 			t.Fatalf("Unexpected length returned from write: %d; expected: %d", n, len(chunk))
 		}
 	}
-
+	/* commit 完成blob writer的进程。并且通过提供的digest来验证这些上传的数据 */
 	blob, err := upload.Commit(ctx, distribution.Descriptor{
 		Digest: dgst,
 		Size:   int64(len(b1)),
@@ -365,6 +445,10 @@ func TestBlobUploadChunked(t *testing.T) {
 	}
 }
 
+/* 单一传送，只传送一个chunk，与之前将一个blob等分成多个chunk相比
+这种传输方式在具体实现上，只有一个uuid，请求的时候也是一个uuid而不是uuid数组。
+剩下的流程和上面的上传过程相似。
+*/
 func TestBlobUploadMonolithic(t *testing.T) {
 	dgst, b1 := newRandomBlob(1024)
 	var m testutil.RequestResponseMap

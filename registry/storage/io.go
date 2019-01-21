@@ -13,6 +13,7 @@ const (
 	maxBlobGetSize = 4 << 20
 )
 
+/* 读取存储在registry存储库中的数据 */
 func getContent(ctx context.Context, driver driver.StorageDriver, p string) ([]byte, error) {
 	r, err := driver.Reader(ctx, p, 0)
 	if err != nil {
